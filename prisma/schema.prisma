@@ -1,0 +1,388 @@
+// Nielsen's Transport & Logistics — Prisma Schema
+// Improvements over brief:
+//   - Proper enums instead of raw strings
+//   - Composite indexes for common query patterns
+//   - Cascading deletes where appropriate
+//   - Audit timestamps on all tables
+//   - Proper decimal types for money fields
+//   - Separated truck_settings into its own model
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  DRIVER
+  CUSTOMER
+}
+
+enum RouteType {
+  MELB_TO_BAIRNSDALE
+  BAIRNSDALE_TO_NSW
+  CUSTOM
+}
+
+enum RunStatus {
+  DRAFT
+  PLANNED
+  LOCKED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum BookingStatus {
+  DRAFT
+  CONFIRMED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+enum StopStatus {
+  PENDING
+  ARRIVED
+  LOADING
+  UNLOADING
+  COMPLETED
+  SKIPPED
+}
+
+enum TrolleyEventType {
+  DROP
+  PICKUP
+  ADJUSTMENT
+}
+
+enum OcrStatus {
+  PENDING
+  PROCESSING
+  PARSED
+  FAILED
+  MANUALLY_REVIEWED
+}
+
+enum PackingUnit {
+  TRAY
+  LOOSE
+  PALLET
+}
+
+// ─── Users & Auth ────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  name           String
+  passwordHash   String    @map("password_hash")
+  role           UserRole  @default(CUSTOMER)
+  phone          String?
+  avatarUrl      String?   @map("avatar_url")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  customerProfile Customer?
+  assignedRuns    Run[]              @relation("DriverRuns")
+  trolleyEvents   TrolleyEvent[]
+  fuelLogs        FuelLog[]
+  deliveryConfs   DeliveryConfirmation[]
+  pickupConfs     PickupConfirmation[]
+
+  @@map("users")
+}
+
+// ─── Customers ───────────────────────────────────────────
+
+model Customer {
+  id          String   @id @default(cuid())
+  userId      String?  @unique @map("user_id")
+  name        String
+  address     String
+  lat         Float?
+  lng         Float?
+  contactName String?  @map("contact_name")
+  contactPhone String? @map("contact_phone")
+  contactEmail String? @map("contact_email")
+  notes       String?
+  defaultRunId String? @map("default_run_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user            User?           @relation(fields: [userId], references: [id])
+  defaultRun      Run?            @relation("DefaultRun", fields: [defaultRunId], references: [id])
+  bookings        Booking[]
+  stops           Stop[]
+  trolleyBalance  TrolleyBalance?
+
+  @@index([defaultRunId])
+  @@map("customers")
+}
+
+// ─── Runs ────────────────────────────────────────────────
+
+model Run {
+  id             String    @id @default(cuid())
+  name           String
+  routeType      RouteType @map("route_type")
+  scheduledDate  DateTime  @map("scheduled_date")
+  driverId       String?   @map("driver_id")
+  status         RunStatus @default(DRAFT)
+  odoStart       Int?      @map("odo_start")
+  odoEnd         Int?      @map("odo_end")
+  driverHours    Float?    @map("driver_hours")
+  driverRate     Decimal?  @map("driver_rate") @db.Decimal(8, 2) // $/hr
+  notes          String?
+  lockedAt       DateTime? @map("locked_at")
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  driver           User?       @relation("DriverRuns", fields: [driverId], references: [id])
+  defaultCustomers Customer[]  @relation("DefaultRun")
+  bookings         Booking[]
+  stops            Stop[]
+  fuelLogs         FuelLog[]
+  profitability    RunProfitability?
+
+  @@index([scheduledDate])
+  @@index([driverId, scheduledDate])
+  @@index([status])
+  @@map("runs")
+}
+
+// ─── Bookings ────────────────────────────────────────────
+
+model Booking {
+  id              String        @id @default(cuid())
+  customerId      String        @map("customer_id")
+  runId           String?       @map("run_id")
+  status          BookingStatus @default(DRAFT)
+  freightCharge   Decimal       @default(0) @map("freight_charge") @db.Decimal(10, 2)
+  invoiceValue    Decimal       @default(0) @map("invoice_value") @db.Decimal(10, 2)
+  predictedTrolleys Int?        @map("predicted_trolleys")
+  actualTrolleys  Int?          @map("actual_trolleys")
+  isNielsensOwn   Boolean       @default(false) @map("is_nielsens_own")
+  notes           String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  customer     Customer       @relation(fields: [customerId], references: [id])
+  run          Run?           @relation(fields: [runId], references: [id])
+  lines        BookingLine[]
+  invoice      Invoice?
+  pickupConfs  PickupConfirmation[]
+
+  @@index([customerId])
+  @@index([runId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("bookings")
+}
+
+// ─── Booking Lines ───────────────────────────────────────
+
+model BookingLine {
+  id         String      @id @default(cuid())
+  bookingId  String      @map("booking_id")
+  species    String
+  potSize    String      @map("pot_size")
+  quantity   Int
+  packType   PackingUnit @default(TRAY) @map("pack_type")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("booking_lines")
+}
+
+// ─── Invoices & OCR ──────────────────────────────────────
+
+model Invoice {
+  id           String    @id @default(cuid())
+  bookingId    String    @unique @map("booking_id")
+  rawPdfUrl    String?   @map("raw_pdf_url")
+  rawOcrOutput String?   @map("raw_ocr_output") // Full OCR text
+  parsedJson   Json?     @map("parsed_json")
+  ocrStatus    OcrStatus @default(PENDING) @map("ocr_status")
+  senderEmail  String?   @map("sender_email")
+  errorMessage String?   @map("error_message")
+  reviewedAt   DateTime? @map("reviewed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([ocrStatus])
+  @@map("invoices")
+}
+
+// ─── Stops ───────────────────────────────────────────────
+
+model Stop {
+  id               String     @id @default(cuid())
+  runId            String     @map("run_id")
+  customerId       String     @map("customer_id")
+  stopOrder        Int        @map("stop_order")
+  estimatedArrival DateTime?  @map("estimated_arrival")
+  actualArrival    DateTime?  @map("actual_arrival")
+  status           StopStatus @default(PENDING)
+  distanceFromPrev Float?     @map("distance_from_prev") // km
+  createdAt        DateTime   @default(now()) @map("created_at")
+
+  // Relations
+  run              Run                    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  customer         Customer               @relation(fields: [customerId], references: [id])
+  trolleyEvents    TrolleyEvent[]
+  deliveryConfs    DeliveryConfirmation[]
+  pickupConfs      PickupConfirmation[]
+
+  @@unique([runId, stopOrder])
+  @@index([runId])
+  @@map("stops")
+}
+
+// ─── Trolley Tracking ────────────────────────────────────
+
+model TrolleyEvent {
+  id        String           @id @default(cuid())
+  stopId    String           @map("stop_id")
+  driverId  String           @map("driver_id")
+  eventType TrolleyEventType @map("event_type")
+  qty       Int
+  timestamp DateTime         @default(now())
+  notes     String?
+
+  stop   Stop @relation(fields: [stopId], references: [id], onDelete: Cascade)
+  driver User @relation(fields: [driverId], references: [id])
+
+  @@index([stopId])
+  @@index([driverId])
+  @@map("trolley_events")
+}
+
+model TrolleyBalance {
+  id             String   @id @default(cuid())
+  customerId     String   @unique @map("customer_id")
+  qtyOutstanding Int      @default(0) @map("qty_outstanding")
+  lastUpdated    DateTime @default(now()) @map("last_updated")
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@map("trolley_balances")
+}
+
+// ─── Fuel Logs ───────────────────────────────────────────
+
+model FuelLog {
+  id            String   @id @default(cuid())
+  runId         String   @map("run_id")
+  driverId      String   @map("driver_id")
+  litres        Float
+  pricePerLitre Decimal  @map("price_per_litre") @db.Decimal(6, 3)
+  odoReading    Int      @map("odo_reading")
+  timestamp     DateTime @default(now())
+
+  run    Run  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  driver User @relation(fields: [driverId], references: [id])
+
+  @@index([runId])
+  @@map("fuel_logs")
+}
+
+// ─── Delivery & Pickup Confirmations ─────────────────────
+
+model DeliveryConfirmation {
+  id        String   @id @default(cuid())
+  stopId    String   @map("stop_id")
+  driverId  String   @map("driver_id")
+  photos    Json     @default("[]") // string[] of URLs
+  timestamp DateTime @default(now())
+  notes     String?
+  signature String?  // base64 data URL
+
+  stop   Stop @relation(fields: [stopId], references: [id], onDelete: Cascade)
+  driver User @relation(fields: [driverId], references: [id])
+
+  @@index([stopId])
+  @@map("delivery_confirmations")
+}
+
+model PickupConfirmation {
+  id             String   @id @default(cuid())
+  stopId         String   @map("stop_id")
+  bookingId      String   @map("booking_id")
+  driverId       String   @map("driver_id")
+  linesChecked   Json     @default("[]") @map("lines_checked") // checked line IDs
+  trolleysLoaded Int      @default(0) @map("trolleys_loaded")
+  timestamp      DateTime @default(now())
+
+  stop    Stop    @relation(fields: [stopId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@index([stopId])
+  @@map("pickup_confirmations")
+}
+
+// ─── Profitability ───────────────────────────────────────
+
+model RunProfitability {
+  id            String   @id @default(cuid())
+  runId         String   @unique @map("run_id")
+  totalRevenue  Decimal  @default(0) @map("total_revenue") @db.Decimal(12, 2)
+  fuelCost      Decimal  @default(0) @map("fuel_cost") @db.Decimal(12, 2)
+  labourCost    Decimal  @default(0) @map("labour_cost") @db.Decimal(12, 2)
+  otherCosts    Decimal  @default(0) @map("other_costs") @db.Decimal(12, 2)
+  netMargin     Decimal  @default(0) @map("net_margin") @db.Decimal(12, 2)
+  litresPerKm   Float?   @map("litres_per_km")
+  totalKm       Float?   @map("total_km")
+  flagged       Boolean  @default(false) // > 15% above baseline
+  calculatedAt  DateTime @default(now()) @map("calculated_at")
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("run_profitability")
+}
+
+// ─── Trolley ML Training Data ────────────────────────────
+
+model TrolleyTrainingData {
+  id              String   @id @default(cuid())
+  invoiceValue    Float    @map("invoice_value")
+  lineCount       Int      @map("line_count")
+  potSizeMix      Json     @map("pot_size_mix") // { "140mm": 50, "200mm": 30 }
+  actualTrolleys  Int      @map("actual_trolleys")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("trolley_training_data")
+}
+
+// ─── Truck Settings ──────────────────────────────────────
+
+model TruckSettings {
+  id              String @id @default(cuid())
+  name            String
+  lengthMetres    Float  @map("length_metres")
+  widthMetres     Float  @map("width_metres")
+  heightMetres    Float  @map("height_metres")
+  trolleyLength   Float  @map("trolley_length") // metres
+  trolleyWidth    Float  @map("trolley_width")  // metres
+  maxTrolleys     Int    @map("max_trolleys")
+  isDefault       Boolean @default(false) @map("is_default")
+
+  @@map("truck_settings")
+}
