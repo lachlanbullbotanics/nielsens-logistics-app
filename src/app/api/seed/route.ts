@@ -1,21 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
 import prisma from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
-import { authOptions } from '@/lib/auth';
 
 // POST /api/seed — seed the database with demo data
-// SECURITY: Requires admin auth + SEED_ENABLED=true env var
+// SECURITY: Requires SEED_ENABLED=true env var (no auth — bootstraps demo users)
 export async function POST() {
-  // Guard 1: Must explicitly opt-in via environment variable
   if (process.env.SEED_ENABLED !== 'true') {
     return NextResponse.json({ ok: false, error: 'Seed endpoint is disabled' }, { status: 403 });
-  }
-
-  // Guard 2: Must be authenticated as admin
-  const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== 'ADMIN') {
-    return NextResponse.json({ ok: false, error: 'Admin authentication required' }, { status: 403 });
   }
 
   const hash = await bcrypt.hash('password123', 12);

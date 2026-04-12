@@ -102,7 +102,6 @@ export const config = {
     '/api/profitability/:path*',
     '/api/invoices/:path*',
     '/api/ml/:path*',
-    '/api/seed/:path*',
     '/api/confirmations/:path*',
     '/api/upload/:path*',
   ],
