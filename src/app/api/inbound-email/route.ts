@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
       data: {
         bookingId: booking.id,
         rawOcrOutput: ocrResult.rawText,
-        parsedJson: ocrResult.lines as unknown as Record<string, unknown>[],
+        parsedJson: JSON.parse(JSON.stringify(ocrResult.lines)),
         ocrStatus: ocrResult.status,
         senderEmail: senderEmail ?? null,
         errorMessage: ocrResult.error ?? null,
