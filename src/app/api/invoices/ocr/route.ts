@@ -49,13 +49,13 @@ export async function POST(req: NextRequest) {
     create: {
       bookingId: targetBookingId,
       rawOcrOutput: result.rawText,
-      parsedJson: result.lines as unknown as Record<string, unknown>[],
+      parsedJson: result.lines as any,
       ocrStatus: result.status,
       errorMessage: result.error ?? null,
     },
     update: {
       rawOcrOutput: result.rawText,
-      parsedJson: result.lines as unknown as Record<string, unknown>[],
+      parsedJson: result.lines as any,
       ocrStatus: result.status,
       errorMessage: result.error ?? null,
       updatedAt: new Date(),

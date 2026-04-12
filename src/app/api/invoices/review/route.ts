@@ -115,7 +115,7 @@ export async function PATCH(req: NextRequest) {
       where: { id: invoiceId },
       data: {
         ocrStatus: 'MANUALLY_REVIEWED',
-        parsedJson: lines as unknown as Record<string, unknown>[],
+        parsedJson: lines as any,
         reviewedAt: new Date(),
       },
     });
